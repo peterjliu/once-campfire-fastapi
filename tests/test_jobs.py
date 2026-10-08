@@ -237,3 +237,60 @@ def test_restore_reopens_queue_connections(w: World) -> None:
     with jobs.connect() as after:
         assert after is not before
         assert after.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
+
+
+def test_webhook_may_target_private_network_bots_like_rails(w: World) -> None:
+    """Rails deliberately exempts webhooks from PrivateNetworkGuard: only an administrator
+    sets the URL, and self-hosted bots commonly live on loopback or the LAN."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["content-length"]))
+            self.send_response(200)
+            self.send_header("content-type", "text/plain; charset=utf-8")
+            self.send_header("content-length", "9")
+            self.end_headers()
+            self.wfile.write(b"lan reply")
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        bot = domain.create_user(name="LAN bot", role=2, bot_token="lan")
+        room = domain.create_room("Rooms::Direct", w.admin)
+        domain.grant_memberships(room, [w.admin, bot])
+        hook = domain.create_webhook(bot, f"http://127.0.0.1:{server.server_port}/hook")
+        message = domain.create_message(w.admin, room, "hello")
+        jobs.perform("webhook", {"webhook_id": hook, "message_id": message.id})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert "lan reply" == w.scalar(
+        "SELECT action_text_rich_texts.body FROM messages JOIN action_text_rich_texts ON "
+        "action_text_rich_texts.record_id=messages.id AND "
+        "action_text_rich_texts.record_type='Message' WHERE messages.room_id=? "
+        "AND messages.creator_id=?",
+        room.id,
+        bot.id,
+    )
+
+
+def test_unreachable_webhook_fails_the_job_without_a_reply(w: World) -> None:
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    bot = domain.create_user(name="Offline bot", role=2, bot_token="offline")
+    room = domain.create_room("Rooms::Direct", w.admin)
+    domain.grant_memberships(room, [w.admin, bot])
+    hook = domain.create_webhook(bot, f"http://127.0.0.1:{closed_port}/hook")
+    message = domain.create_message(w.admin, room, "hello")
+    with pytest.raises(httpx.ConnectError):
+        jobs.perform("webhook", {"webhook_id": hook, "message_id": message.id})
+    assert w.scalar("SELECT count(*) FROM messages WHERE room_id=?", room.id) == 1

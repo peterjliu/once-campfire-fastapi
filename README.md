@@ -59,6 +59,14 @@ Run the checks with `make check` (ruff, pyright strict, pytest against real SQLi
 - HTML whitespace, malformed HTML repair, cache validators and native-library media bytes can
   differ; canonical editor plain text and actual browser workflows are tested.
 - App and queue snapshots are separate atomic SQLite backups; job delivery is at least once.
+  A webhook whose connection fails is retried (bounded, then marked dead) where Rails fails
+  the job once; timeouts post the Rails "Failed to respond within 7 seconds" reply instead.
+- Not a difference, recorded as a decision: bot webhook URLs may point at private, loopback
+  or LAN addresses, exactly as in Rails (`app/models/webhook.rb` and `SECURITY.md`,
+  "Intentional behavior"). Only an administrator sets the URL, and self-hosted bots
+  commonly run on internal hosts. Redirects are not followed. Link unfurling and Web Push,
+  which any member or browser can point anywhere, keep the private-network guard and
+  connect to the validated, pinned address.
 
 ## Attribution
 
