@@ -1,7 +1,7 @@
 """Independent Rails outputs, including malformed tokens and old installations."""
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -17,11 +17,15 @@ type Example = dict[str, object]
 
 
 def timestamp(value: object) -> datetime | None:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) and value else None
+    return (
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if isinstance(value, str) and value
+        else None
+    )
 
 
 @pytest.fixture(autouse=True)
-def vectors_secret() -> Iterator[None]:
+def vectors_secret() -> Generator[None]:
     original = config.settings.secret_key_base
     config.settings.secret_key_base = VECTORS["secret_key_base"]
     with patch("campfire.clock.now", return_value=timestamp(VECTORS["now"])):
@@ -34,7 +38,9 @@ def check_verification(
 ) -> None:
     failures: list[object] = []
     for example in examples:
-        with patch("campfire.clock.now", return_value=timestamp(example.get("now", VECTORS["now"]))):
+        with patch(
+            "campfire.clock.now", return_value=timestamp(example.get("now", VECTORS["now"]))
+        ):
             try:
                 actual = verify(example)
             except ValueError:
@@ -46,6 +52,8 @@ def check_verification(
 
 def text(example: Example, key: str) -> str:
     value = example[key]
+    if value is None:
+        return ""
     assert isinstance(value, str)
     return value
 
@@ -92,7 +100,10 @@ def test_signed_id_generation() -> None:
     for example in VECTORS["signed_ids"]["generate"]:
         assert (
             rails.signed_id(
-                example["model"], example["id"], example["purpose"], timestamp(example["expires_at"])
+                example["model"],
+                example["id"],
+                example["purpose"],
+                timestamp(example["expires_at"]),
             )
             == example["signed_id"]
         )
@@ -151,7 +162,9 @@ def test_app_verifier_verification() -> None:
     check_verification(
         examples,
         lambda e: rails.verify(
-            text(e, "message"), text(e, "name"), e["purpose"] if isinstance(e["purpose"], str) else None
+            text(e, "message"),
+            text(e, "name"),
+            e["purpose"] if isinstance(e["purpose"], str) else None,
         ),
     )
 
@@ -225,4 +238,3 @@ def test_secret_rotation_does_not_reuse_cached_key() -> None:
 def test_active_support_json_line_separators() -> None:
     # load_defaults 8.1 leaves JS separators literal but escapes HTML entities.
     assert rails.encode("<>&\u2028\u2029") == '"\\u003c\\u003e\\u0026\u2028\u2029"'.encode()
-

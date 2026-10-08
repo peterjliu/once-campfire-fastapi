@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cd /rails
+exec python -m campfire.cli backup

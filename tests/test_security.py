@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 from campfire import domain, rails
 from campfire.asgi import app
 from campfire.middleware import request_allowed
-from tests.conftest import World
+from tests.conftest import World, set_cookie
 
 
 def client() -> TestClient:
@@ -31,9 +31,7 @@ def test_transfer_put_signs_in_and_rejects_tampering(w: World) -> None:
     token = rails.signed_id("User", w.member.id, "transfer")
     with client() as anonymous:
         assert anonymous.put("/session/transfers/" + token + "x").status_code == 400
-        response = anonymous.post(
-            "/session/transfers/" + token, data={"_method": "put"}
-        )
+        response = anonymous.post("/session/transfers/" + token, data={"_method": "put"})
         assert response.status_code == 302
         assert "session_token" in response.cookies
 
@@ -54,11 +52,10 @@ def test_existing_session_id_reuses_cookie_without_unused_random_generation(w: W
 
 def test_missing_session_id_is_generated_once_and_preserves_old_cookie_fields(w: World) -> None:
     with client() as fresh:
-        fresh.cookies.set(
+        set_cookie(
+            fresh,
             "_campfire_session",
-            rails.encrypt_cookie(
-                "_campfire_session", {"return_to_after_authenticating": "/users"}
-            ),
+            rails.encrypt_cookie("_campfire_session", {"return_to_after_authenticating": "/users"}),
         )
         with patch("campfire.middleware.secrets.token_hex", return_value="a" * 32) as random:
             response = fresh.get("/up")
@@ -77,14 +74,15 @@ def test_missing_session_id_is_generated_once_and_preserves_old_cookie_fields(w:
 
 
 def test_membership_required_even_for_open_rooms(w: World) -> None:
-    w.foreign_write(
-        "DELETE FROM memberships WHERE room_id=? AND user_id=?", w.room.id, w.member.id
-    )
+    w.foreign_write("DELETE FROM memberships WHERE room_id=? AND user_id=?", w.room.id, w.member.id)
     with client() as other:
         token = w.login(other, w.member)
         assert other.get(f"/rooms/{w.room.id}").status_code == 302
         response = w.post(
-            f"/rooms/{w.room.id}/messages", {"message[body]": "intrusion"}, client=other, token=token
+            f"/rooms/{w.room.id}/messages",
+            {"message[body]": "intrusion"},
+            client=other,
+            token=token,
         )
         assert response.status_code == 302
     assert w.scalar("SELECT count(*) FROM messages") == 0
@@ -188,7 +186,8 @@ def test_fetch_metadata_policy_matrix() -> None:
 
 def test_no_token_secure_login_and_legacy_cookie(w: World) -> None:
     with TestClient(app, base_url="https://testserver", follow_redirects=False) as secure:
-        secure.cookies.set(
+        set_cookie(
+            secure,
             "_campfire_session",
             rails.encrypt_cookie(
                 "_campfire_session", {"session_id": "old-tab", "_csrf_token": "legacy-value"}

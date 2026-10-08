@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+cd /rails
+python -m campfire.cli restore
+exec python -m campfire.cli prepare

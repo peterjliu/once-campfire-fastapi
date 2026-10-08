@@ -7,12 +7,12 @@ os.environ.setdefault("SECRET_KEY_BASE", "tests-only")
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 from starlette.testclient import TestClient
 
@@ -66,7 +66,7 @@ class World:
         method: str | None = None,
         client: TestClient | None = None,
         token: str | None = None,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         values: dict[str, str | list[str]] = dict(data or {})
         values["authenticity_token"] = token or self.token
         if method:
@@ -95,6 +95,14 @@ class World:
         self.sql(query, *params)
 
 
+def set_cookie(client: TestClient, name: str, value: str) -> None:
+    """Replace a cookie the server set (httpx stores it under `testserver.local`)."""
+    for cookie in list(client.cookies.jar):
+        if cookie.name == name:
+            client.cookies.jar.clear(cookie.domain, cookie.path, cookie.name)
+    client.cookies.set(name, value, domain="testserver.local")
+
+
 def install(root: Path) -> tuple[Path, Path]:
     database = root / "db/production.sqlite3"
     database.parent.mkdir(parents=True)
@@ -108,6 +116,7 @@ def install(root: Path) -> tuple[Path, Path]:
     config.settings.response_cache_bytes = 64 * 1024 * 1024
     config.settings.force_ssl = False
     config.settings.start_jobs = False
+    config.settings.bcrypt_rounds = 4
     db.reset()
     cache.clear()
     jobs.reset_rates()
@@ -115,7 +124,7 @@ def install(root: Path) -> tuple[Path, Path]:
 
 
 @pytest.fixture
-def empty_root() -> Iterator[Path]:
+def empty_root() -> Generator[Path]:
     (ROOT / "tmp").mkdir(exist_ok=True)
     directory = Path(tempfile.mkdtemp(dir=ROOT / "tmp"))
     original = config.settings.snapshot()
@@ -130,7 +139,7 @@ def empty_root() -> Iterator[Path]:
 
 
 @pytest.fixture
-def w(empty_root: Path) -> Iterator[World]:
+def w(empty_root: Path) -> Generator[World]:
     database = empty_root / "db/production.sqlite3"
     domain.create_account("Campfire", "invitation")
     admin = domain.create_user(

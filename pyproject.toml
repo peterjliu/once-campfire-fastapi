@@ -21,10 +21,16 @@ dependencies = [
     "redis==8.1.0",
     "orjson==3.12.0",
     "python-multipart==0.0.32",
+    "pillow==12.3.0",
 ]
 
 [dependency-groups]
-dev = ["pytest==9.1.1", "pyright==1.1.414", "ruff==0.16.8", "pillow==12.3.0"]
+dev = [
+    "pytest==9.1.1",
+    "pyright==1.1.414",
+    "ruff==0.16.8",
+    "httpx2==2.13.1",
+]
 
 [tool.uv]
 package = false

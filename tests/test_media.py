@@ -6,17 +6,18 @@ import json
 import subprocess
 import wave
 from io import BytesIO
-from urllib.parse import urlsplit
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 import pytest
 from starlette.testclient import TestClient
 
 from campfire import domain, rails
 from campfire.asgi import app
+from campfire.jsonvalue import as_dict
 from campfire.media import representation_url, variant
+from campfire.presentation import message_views
 from campfire.queries import blob_for, message_attachment_blob
-from campfire.rendering import message_views
 from campfire.storage import Upload, blob_url, path_for
 from tests.conftest import World
 from tests.images import pdf, png
@@ -84,14 +85,21 @@ def test_signed_direct_upload_and_tamper_rejection(w: World) -> None:
             headers={"content-type": "application/json", "sec-fetch-site": "same-origin"},
         )
     assert response.status_code == 200
-    data = response.json()
-    path = urlsplit(data["direct_upload"]["url"]).path
+    data = as_dict(response.json())
+    assert data is not None
+    upload = as_dict(data["direct_upload"])
+    assert upload is not None
+    path = urlsplit(str(upload["url"])).path
     plain = {"content-type": "text/plain"}
     with TestClient(app, follow_redirects=False) as anonymous:
         assert anonymous.put(path, content=raw, headers=plain).status_code == 401
         assert anonymous.put(path + "bad", content=raw, headers=plain).status_code == 404
     assert w.client.put(path, content=raw, headers=plain).status_code == 204
-    blob = blob_for(data["id"])
+    blob_id = data["id"]
+    signed_id = data["signed_id"]
+    assert isinstance(blob_id, int)
+    assert isinstance(signed_id, str)
+    blob = blob_for(blob_id)
     assert blob is not None
     assert w.client.get(blob_url(blob)).status_code == 200
     with TestClient(app, follow_redirects=False) as other:
@@ -101,18 +109,19 @@ def test_signed_direct_upload_and_tamper_rejection(w: World) -> None:
     for metadata in ("[]", "123", '"legacy"', "not-json"):
         w.foreign_write("UPDATE active_storage_blobs SET metadata=? WHERE id=?", metadata, blob.id)
         assert w.client.put(path, content=raw, headers=plain).status_code == 204
-    w.foreign_write(
-        "UPDATE active_storage_blobs SET metadata=? WHERE id=?", blob.metadata, blob.id
-    )
+    w.foreign_write("UPDATE active_storage_blobs SET metadata=? WHERE id=?", blob.metadata, blob.id)
     response = w.post(
         f"/rooms/{w.room.id}/messages",
-        {"message[body]": "", "message[attachment]": data["signed_id"]},
+        {"message[body]": "", "message[attachment]": signed_id},
     )
     assert response.status_code == 200
-    assert w.scalar(
-        "SELECT count(*) FROM active_storage_attachments WHERE record_type='Message' AND blob_id=?",
-        data["id"],
-    ) == 1
+    assert (
+        w.scalar(
+            "SELECT count(*) FROM active_storage_attachments WHERE record_type='Message' AND blob_id=?",
+            blob_id,
+        )
+        == 1
+    )
 
 
 def test_pdf_video_audio_native_processing_and_presentation(w: World) -> None:
@@ -155,11 +164,14 @@ def test_pdf_video_audio_native_processing_and_presentation(w: World) -> None:
             assert "Download" in rendered
             assert json.loads(blob.metadata or "{}")["duration"] > 0
             continue
-        assert w.scalar(
-            "SELECT count(*) FROM active_storage_attachments WHERE "
-            "record_type='ActiveStorage::Blob' AND record_id=? AND name='preview_image'",
-            blob.id,
-        ) == 1
+        assert (
+            w.scalar(
+                "SELECT count(*) FROM active_storage_attachments WHERE "
+                "record_type='ActiveStorage::Blob' AND record_id=? AND name='preview_image'",
+                blob.id,
+            )
+            == 1
+        )
         assert w.client.get(representation_url(blob)).status_code == 200
         assert ("poster=" if mime == "video/mp4" else "lightbox#open") in rendered
 
@@ -181,11 +193,14 @@ def test_first_run_preserves_avatar_and_redirects_to_room(w: World) -> None:
         )
         assert response.status_code == 302
         founder = w.scalar("SELECT id FROM users WHERE email_address='founder@example.test'")
-        assert w.scalar(
-            "SELECT count(*) FROM active_storage_attachments WHERE "
-            "record_type='User' AND record_id=? AND name='avatar'",
-            founder,
-        ) == 1
+        assert (
+            w.scalar(
+                "SELECT count(*) FROM active_storage_attachments WHERE "
+                "record_type='User' AND record_id=? AND name='avatar'",
+                founder,
+            )
+            == 1
+        )
         location = fresh.get("/").headers["location"]
         assert location.startswith("/rooms/")
         assert location.removeprefix("/rooms/").isdigit()
@@ -218,9 +233,7 @@ def test_attachment_updates_preserve_body_index_and_rollback(w: World) -> None:
         patch("campfire.media.process_attachment", side_effect=RuntimeError("analysis failed")),
         pytest.raises(RuntimeError),
     ):
-        domain.update_message(
-            message, attachment=Upload("failure.png", "image/png", png(30, 20))
-        )
+        domain.update_message(message, attachment=Upload("failure.png", "image/png", png(30, 20)))
     current = message_attachment_blob(message.id)
     assert current is not None
     assert current.id == new.id

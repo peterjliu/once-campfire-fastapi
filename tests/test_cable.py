@@ -9,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from campfire import rails
 from campfire.asgi import app
+from campfire.jsonvalue import as_dict
 from tests.conftest import World
 
 type Frame = dict[str, object]
@@ -21,8 +22,8 @@ def receive(socket: object) -> Frame:
 
     assert isinstance(socket, WebSocketTestSession)
     while True:
-        frame = json.loads(socket.receive_text())
-        assert isinstance(frame, dict)
+        frame = as_dict(json.loads(socket.receive_text()))
+        assert frame is not None
         if frame.get("type") != "ping":
             return frame
 
@@ -51,28 +52,38 @@ def test_room_subscription_receives_live_message_and_presence(w: World) -> None:
         assert receive(socket) == {"type": "confirm_subscription", "identifier": room_id}
         socket.send_text(json.dumps({"command": "subscribe", "identifier": presence}))
         assert receive(socket) == {"type": "confirm_subscription", "identifier": presence}
-        assert w.scalar(
-            "SELECT connections FROM memberships WHERE room_id=? AND user_id=?",
-            w.room.id,
-            w.admin.id,
-        ) == 1
+        assert (
+            w.scalar(
+                "SELECT connections FROM memberships WHERE room_id=? AND user_id=?",
+                w.room.id,
+                w.admin.id,
+            )
+            == 1
+        )
         response = w.post(f"/rooms/{w.room.id}/messages", {"message[body]": "live over cable"})
         assert response.status_code == 200
         frame = receive(socket)
         assert frame["identifier"] == room_id
         assert frame["message"] == response.text
-    assert w.scalar(
-        "SELECT connections FROM memberships WHERE room_id=? AND user_id=?", w.room.id, w.admin.id
-    ) == 0
+    assert (
+        w.scalar(
+            "SELECT connections FROM memberships WHERE room_id=? AND user_id=?",
+            w.room.id,
+            w.admin.id,
+        )
+        == 0
+    )
 
 
 def test_forged_and_foreign_streams_are_rejected(w: World) -> None:
-    forged = identifier("RoomMessagesChannel", signed_stream_name=room_stream(w)[:-1] + "0")
+    genuine = room_stream(w)
+    forged = identifier(
+        "RoomMessagesChannel",
+        signed_stream_name=genuine[:-1] + ("1" if genuine[-1] == "0" else "0"),
+    )
     private = identifier(
         "RoomMessagesChannel",
-        signed_stream_name=rails.sign_stream(
-            rails.stream_name("Rooms::Closed", w.private.id)
-        ),
+        signed_stream_name=rails.sign_stream(rails.stream_name("Rooms::Closed", w.private.id)),
     )
     foreign_rooms = identifier(
         "Turbo::StreamsChannel",
@@ -95,17 +106,22 @@ def test_forged_and_foreign_streams_are_rejected(w: World) -> None:
 
 
 def test_signed_out_socket_is_refused(w: World) -> None:
-    with TestClient(app) as anonymous, pytest.raises(WebSocketDisconnect):
-        with anonymous.websocket_connect("/cable", subprotocols=PROTOCOL) as socket:
-            socket.receive_text()
+    with (
+        TestClient(app) as anonymous,
+        pytest.raises(WebSocketDisconnect),
+        anonymous.websocket_connect("/cable", subprotocols=PROTOCOL) as socket,
+    ):
+        socket.receive_text()
 
 
 def test_cross_origin_socket_is_refused(w: World) -> None:
-    with pytest.raises(WebSocketDisconnect):
-        with w.client.websocket_connect(
+    with (
+        pytest.raises(WebSocketDisconnect),
+        w.client.websocket_connect(
             "/cable", subprotocols=PROTOCOL, headers={"origin": "http://attacker.test"}
-        ) as socket:
-            socket.receive_text()
+        ) as socket,
+    ):
+        socket.receive_text()
 
 
 def test_typing_notifications_reach_room_subscribers(w: World) -> None:
@@ -116,7 +132,11 @@ def test_typing_notifications_reach_room_subscribers(w: World) -> None:
         assert receive(socket) == {"type": "confirm_subscription", "identifier": typing}
         socket.send_text(
             json.dumps(
-                {"command": "message", "identifier": typing, "data": json.dumps({"action": "start"})}
+                {
+                    "command": "message",
+                    "identifier": typing,
+                    "data": json.dumps({"action": "start"}),
+                }
             )
         )
         assert receive(socket) == {

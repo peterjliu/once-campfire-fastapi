@@ -1,16 +1,21 @@
 """Authenticated page cache: fresh authorization, epochs, representations."""
 
-import gzip
 from collections.abc import Callable
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
 from campfire import config, middleware, rails, rendering
+from campfire.jsonvalue import as_dict
 from campfire.response_cache import cache
-from tests.conftest import World
+from tests.conftest import World, set_cookie
 
-CACHED_PATHS = ("/rooms/{room}", "/rooms/{room}/messages", "/users/me/sidebar", "/searches?q=literal")
+CACHED_PATHS = (
+    "/rooms/{room}",
+    "/rooms/{room}/messages",
+    "/users/me/sidebar",
+    "/searches?q=literal",
+)
 
 
 def counting_render() -> tuple[list[str], Callable[[str, object], str]]:
@@ -38,11 +43,8 @@ def test_cached_pages_reuse_complete_token_free_representations(w: World) -> Non
             assert second.status_code == 200
             assert len(calls) == 1, (path, encoding, calls)
             assert first.content == second.content
-            body = (
-                gzip.decompress(second.content)
-                if second.headers.get("content-encoding") == "gzip"
-                else second.content
-            )
+            # httpx decodes gzip transparently, so content is the decoded representation.
+            body = second.content
             assert b'name="csrf-token"' not in body
             assert b'name="authenticity_token"' not in body
     assert (
@@ -55,10 +57,12 @@ def test_response_cache_bypasses_incoming_flash_state(w: World) -> None:
     path = f"/rooms/{w.room.id}"
     w.client.get(path)
     w.client.get(path)
-    session = rails.decrypt_cookie("_campfire_session", w.client.cookies["_campfire_session"])
-    assert isinstance(session, dict)
+    session = as_dict(
+        rails.decrypt_cookie("_campfire_session", w.client.cookies["_campfire_session"])
+    )
+    assert session is not None
     session["flash"] = {"flashes": {"notice": "temporary notice"}, "discard": []}
-    w.client.cookies.set("_campfire_session", rails.encrypt_cookie("_campfire_session", session))
+    set_cookie(w.client, "_campfire_session", rails.encrypt_cookie("_campfire_session", session))
     calls, wrapped = counting_render()
     with patch("campfire.rendering.render", side_effect=wrapped):
         w.client.get(path)

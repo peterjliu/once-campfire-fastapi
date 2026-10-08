@@ -65,7 +65,9 @@ def test_webhook_reply_does_not_start_another_bot_webhook(w: World) -> None:
     assert payload["room"]["path"] == f"/rooms/{room.id}/{one.id}-one/messages"
     assert w.scalar("SELECT count(*) FROM messages WHERE room_id=?", room.id) == 2
     with jobs.connect() as connection:
-        queued = [json.loads(row[0])["kind"] for row in connection.execute("SELECT payload FROM jobs")]
+        queued = [
+            json.loads(row[0])["kind"] for row in connection.execute("SELECT payload FROM jobs")
+        ]
     assert "webhook" not in queued
     assert "push" in queued
 
@@ -113,9 +115,9 @@ def test_single_worker_needs_no_redis() -> None:
 
 def test_redis_worker_default_respects_affinity_and_cap() -> None:
     with patch.dict(os.environ, {"REDIS_URL": "redis://localhost"}, clear=True):
-        with patch("os.sched_getaffinity", return_value={2, 4}):
+        with patch("os.process_cpu_count", return_value=2):
             assert worker_count() == 2
-        with patch("os.sched_getaffinity", return_value=set(range(64))):
+        with patch("os.process_cpu_count", return_value=64):
             assert worker_count() == 4
 
 
@@ -128,3 +130,29 @@ def test_explicit_workers_require_redis_and_positive_count() -> None:
         os.environ["WEB_WORKERS"] = "0"
         with pytest.raises(ValueError, match="positive"):
             worker_count()
+
+
+def test_push_transport_refuses_private_addresses_before_connecting() -> None:
+    from campfire import push
+
+    private = [(2, 1, 6, "", ("127.0.0.1", 443))]
+    with (
+        patch("socket.getaddrinfo", return_value=private),
+        patch("socket.create_connection") as connect,
+        pytest.raises(ValueError, match="private endpoint"),
+    ):
+        push.pinned_session().post("https://fcm.googleapis.com/send", data=b"payload")
+    connect.assert_not_called()
+
+
+def test_push_transport_connects_to_the_validated_address() -> None:
+    from campfire import push
+
+    public = [(2, 1, 6, "", ("142.250.1.1", 443))]
+    with (
+        patch("socket.getaddrinfo", return_value=public),
+        patch("socket.create_connection", side_effect=OSError("stop")) as connect,
+        pytest.raises(OSError, match="stop"),
+    ):
+        push.pinned_session().post("https://fcm.googleapis.com/send", data=b"payload", timeout=3.0)
+    connect.assert_called_once_with(("142.250.1.1", 443), timeout=3.0)

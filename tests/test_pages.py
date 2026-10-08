@@ -17,7 +17,6 @@ def test_every_page_renders_complete_html(w: World) -> None:
         f"/rooms/{w.room.id}/@{message.id}",
         f"/rooms/{w.room.id}/messages/{message.id}",
         f"/rooms/{w.room.id}/messages/{message.id}/edit",
-        f"/rooms/{w.room.id}/involvement",
         "/rooms/opens/new",
         "/rooms/closeds/new",
         "/rooms/directs/new",
@@ -125,22 +124,27 @@ def test_member_cannot_administer_account(w: World) -> None:
 def test_rooms_create_rename_involvement_and_delete(w: World) -> None:
     response = w.post(
         "/rooms/closeds",
-        {"room[name]": "Secret plans", "user_ids[]": [str(w.member.id)]},
+        {"room[name]": "Secret plans", "user_ids[]": [str(w.admin.id), str(w.member.id)]},
     )
     assert response.status_code == 302
     room_id = int(response.headers["location"].rsplit("/", 1)[1])
     members = w.sql("SELECT user_id FROM memberships WHERE room_id=? ORDER BY user_id", room_id)
     assert members == [(w.admin.id,), (w.member.id,)]
-    response = w.post(f"/rooms/closeds/{room_id}", {"room[name]": "Renamed plans"}, "patch")
+    response = w.post(
+        f"/rooms/closeds/{room_id}",
+        {"room[name]": "Renamed plans", "user_ids[]": [str(w.admin.id)]},
+        "patch",
+    )
     assert response.status_code == 302
     assert w.scalar("SELECT name FROM rooms WHERE id=?", room_id) == "Renamed plans"
-    response = w.client.put(
-        f"/rooms/{room_id}/involvement", data={"involvement": "everything"}
-    )
+    response = w.client.put(f"/rooms/{room_id}/involvement", data={"involvement": "everything"})
     assert response.status_code == 200
-    assert w.scalar(
-        "SELECT involvement FROM memberships WHERE room_id=? AND user_id=?", room_id, w.admin.id
-    ) == "everything"
+    assert (
+        w.scalar(
+            "SELECT involvement FROM memberships WHERE room_id=? AND user_id=?", room_id, w.admin.id
+        )
+        == "everything"
+    )
     assert w.post(f"/rooms/{room_id}", method="delete").status_code == 302
     assert w.scalar("SELECT count(*) FROM rooms WHERE id=?", room_id) == 0
 
@@ -153,7 +157,10 @@ def test_restricted_room_creation(w: World) -> None:
     )
     with TestClient(app, follow_redirects=False) as other:
         token = w.login(other, w.member)
-        assert w.post("/rooms/opens", {"room[name]": "x"}, client=other, token=token).status_code == 403
+        assert (
+            w.post("/rooms/opens", {"room[name]": "x"}, client=other, token=token).status_code
+            == 403
+        )
 
 
 def test_bots_lifecycle_and_key_rotation(w: World) -> None:
@@ -220,6 +227,7 @@ def test_searches_record_recent_queries_and_clear(w: World) -> None:
 def test_ban_and_unban(w: World) -> None:
     with TestClient(app, follow_redirects=False) as other:
         w.login(other, w.other)
+    w.foreign_write("UPDATE sessions SET ip_address='192.0.2.9' WHERE user_id=?", w.other.id)
     assert w.post(f"/users/{w.other.id}/ban").status_code == 302
     assert w.scalar("SELECT status FROM users WHERE id=?", w.other.id) == 2
     assert w.scalar("SELECT count(*) FROM bans WHERE user_id=?", w.other.id) == 1

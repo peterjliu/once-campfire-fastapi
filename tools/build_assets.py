@@ -121,7 +121,7 @@ def build() -> None:
         manifest[name] = (
             name
             if re.search(r"-[0-9a-zA-Z_-]{7,128}\.digested", name)
-            else re.sub(r"\.(\w+(?:\.map)?)$", lambda m: "-" + digest + m[0], name)
+            else re.sub(r"\.(\w+(?:\.map)?)$", lambda m, digest=digest: "-" + digest + m[0], name)
         )
 
     def url(name: str) -> str:

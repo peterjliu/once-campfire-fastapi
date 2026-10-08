@@ -2,6 +2,7 @@
 
 import sqlite3
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -50,9 +51,7 @@ def test_search_reaches_sparse_membership_and_orders_newest_ids(w: World) -> Non
     assert domain.search_message_ids(w.member, "sparseneedle") == []
     domain.grant_memberships(w.private, [w.member])
     newest = ids[-100:][::-1]
-    w.foreign_write(
-        "UPDATE messages SET created_at='2000-01-01 00:00:00' WHERE id=?", ids[-1]
-    )
+    w.foreign_write("UPDATE messages SET created_at='2000-01-01 00:00:00' WHERE id=?", ids[-1])
     assert domain.search_message_ids(w.member, "sparseneedle") == newest
     assert domain.search_message_ids(w.member, "sparseneedle AND") == []
 
@@ -127,7 +126,7 @@ def test_notification_batch_keeps_individual_jobs_and_one_queue_commit(w: World)
     original = jobs.connect
 
     @contextmanager
-    def traced():  # noqa: ANN202
+    def traced():
         with original() as connection:
             connection.set_trace_callback(statements.append)
             yield connection
@@ -209,7 +208,7 @@ def test_creation_keeps_shared_first_unread_and_direct_latest_unread(w: World) -
         assert marker == format_time(expected.created_at), kind
 
 
-def before_begin(w: World, action: Callable[[], None]) -> object:
+def before_begin(w: World, action: Callable[[], None]) -> AbstractContextManager[object]:
     original = db.begin
 
     def begin(connection: sqlite3.Connection) -> None:
@@ -225,7 +224,7 @@ def test_creation_rechecks_membership_immediately_before_begin(w: World) -> None
             "DELETE FROM memberships WHERE user_id=? AND room_id=?", w.admin.id, w.room.id
         )
 
-    with before_begin(w, revoke), patch("campfire.cable.publish_many") as publish:  # type: ignore[attr-defined]
+    with before_begin(w, revoke), patch("campfire.cable.publish_many") as publish:
         response = w.post(
             f"/rooms/{w.room.id}/messages", {"message[body]": "revoked immediately before BEGIN"}
         )
@@ -245,7 +244,7 @@ def test_creation_resolves_mention_name_inside_transaction(w: World) -> None:
     def rename() -> None:
         w.foreign_write("UPDATE users SET name='Current mention' WHERE id=?", w.member.id)
 
-    with before_begin(w, rename):  # type: ignore[attr-defined]
+    with before_begin(w, rename):
         message = w.message(body=body)
     assert (
         w.scalar("SELECT body FROM message_search_index WHERE rowid=?", message.id)
@@ -328,7 +327,9 @@ def test_signed_inline_embeds_persist_and_mention_plaintext_is_indexed(w: World)
     from tests.images import png
 
     blob = db.write(
-        lambda: store_upload(Upload("inline.png", "image/png", png(20, 20)), "User", w.admin.id, "unused")
+        lambda: store_upload(
+            Upload("inline.png", "image/png", png(20, 20)), "User", w.admin.id, "unused"
+        )
     )
     body = (
         '<p>Hello <action-text-attachment sgid="'
@@ -342,12 +343,15 @@ def test_signed_inline_embeds_persist_and_mention_plaintext_is_indexed(w: World)
         "SELECT id FROM action_text_rich_texts WHERE record_type='Message' AND record_id=?",
         message.id,
     )
-    assert w.scalar(
-        "SELECT count(*) FROM active_storage_attachments WHERE "
-        "record_type='ActionText::RichText' AND record_id=? AND blob_id=?",
-        rich_id,
-        blob.id,
-    ) == 1
+    assert (
+        w.scalar(
+            "SELECT count(*) FROM active_storage_attachments WHERE "
+            "record_type='ActionText::RichText' AND record_id=? AND blob_id=?",
+            rich_id,
+            blob.id,
+        )
+        == 1
+    )
     assert "@Member" in plain_text(body)
     assert "inline.png" in render_body(body)
     assert 'class="mention"' in render_body(body)
