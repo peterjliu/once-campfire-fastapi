@@ -320,12 +320,14 @@ def create_boost(message: Message, booster: User, content: str, *, scroll: bool)
             room = room_by_id(message.room_id)
             view = message_views([message])[0]
             boost = next(b for b in view.Boosts if boost_id == b.ID)
-            extra = ' maintain_scroll="true"' if scroll else ""
             if room is not None:
                 cable.publish(
                     rails.stream_name(room.type, room.id),
                     rendering.turbo_stream(
-                        "append", boost_target(message), rendering.render("boost", boost), extra
+                        "append",
+                        boost_target(message),
+                        rendering.render("boost", boost),
+                        maintain_scroll=scroll,
                     ),
                 )
 

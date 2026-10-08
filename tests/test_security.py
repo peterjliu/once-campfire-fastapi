@@ -275,3 +275,32 @@ def test_security_headers_and_unknown_paths(w: World) -> None:
     assert response.headers["x-frame-options"] == "SAMEORIGIN"
     assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
     assert w.client.get("/no/such/page").status_code == 404
+
+
+def test_turbo_stream_attributes_are_escaped() -> None:
+    from campfire import rendering
+
+    assert rendering.turbo_stream("remove", 'message_x"><img src=x>') == (
+        '<turbo-stream action="remove" target="message_x&quot;&gt;&lt;img src=x&gt;">'
+        "</turbo-stream>"
+    )
+    assert rendering.turbo_stream("append", "t", "<b>f</b>", maintain_scroll=True) == (
+        '<turbo-stream action="append" target="t" maintain_scroll="true">'
+        "<template><b>f</b></template></turbo-stream>"
+    )
+
+
+def test_hostile_client_message_id_cannot_break_out_of_turbo_stream(w: World) -> None:
+    hostile = 'x"><img src=x onerror=alert(1)>'
+    response = w.post(
+        f"/rooms/{w.room.id}/messages",
+        {"message[body]": "hi", "message[client_message_id]": hostile},
+    )
+    assert response.status_code == 200
+    message_id = w.scalar("SELECT id FROM messages WHERE client_message_id=?", hostile)
+    assert isinstance(message_id, int)
+    removal = w.post(f"/rooms/{w.room.id}/messages/{message_id}", method="delete")
+    assert removal.text == (
+        '<turbo-stream action="remove" '
+        'target="message_x&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"></turbo-stream>'
+    )

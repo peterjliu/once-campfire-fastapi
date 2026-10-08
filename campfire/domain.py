@@ -4,6 +4,7 @@ Message operations live in `messaging` and are re-exported here as the domain su
 """
 
 import secrets
+import string
 from collections.abc import Sequence
 
 import bcrypt
@@ -32,6 +33,14 @@ __all__ = [
     "search_message_ids",
     "update_message",
 ]
+
+
+BOT_TOKEN_ALPHABET = string.ascii_letters + string.digits
+
+
+def generate_bot_token() -> str:
+    """Alphanumeric like Rails' `SecureRandom.alphanumeric`, but 22 characters (~131 bits)."""
+    return "".join(secrets.choice(BOT_TOKEN_ALPHABET) for _ in range(22))
 
 
 def password_digest(password: str) -> str:

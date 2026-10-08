@@ -236,12 +236,15 @@ def deliver_webhook(webhook_id: int, message_id: int, body: str) -> None:
         },
     }
     try:
-        response = httpx.post(str(row[0]), json=payload, timeout=7)
+        # Like Rails' Net::HTTP: one request to the administrator-configured URL, no redirects.
+        response = httpx.post(str(row[0]), json=payload, timeout=7, follow_redirects=False)
     except httpx.TimeoutException:
         messaging.create_message(bot, room, "Failed to respond within 7 seconds", webhooks=False)
         return
+    if response.status_code != 200:
+        return
     content_type = response.headers.get("content-type", "").split(";")[0]
-    if response.status_code == 200 and content_type in ("text/plain", "text/html"):
+    if content_type in ("text/plain", "text/html"):
         messaging.create_message(bot, room, response.text, webhooks=False)
     elif content_type and response.content:
         extension = mimetypes.guess_extension(content_type) or ".bin"

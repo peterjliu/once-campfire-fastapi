@@ -256,13 +256,17 @@ def fragment_response(body: str) -> Response:
     return Response(body, media_type=HTML_TYPE)
 
 
-def turbo_stream(action: str, target: str, fragment: str | None = None, extra: str = "") -> str:
-    if fragment is None:
-        return f'<turbo-stream action="{action}" target="{target}"{extra}></turbo-stream>'
-    return (
-        f'<turbo-stream action="{action}" target="{target}"{extra}>'
-        f"<template>{fragment}</template></turbo-stream>"
+def turbo_stream(
+    action: str, target: str, fragment: str | None = None, *, maintain_scroll: bool = False
+) -> str:
+    """A `<turbo-stream>` element; attribute values are escaped like Rails' tag builder."""
+    attributes = (
+        f'action="{html.escape(action, quote=True)}" target="{html.escape(target, quote=True)}"'
     )
+    if maintain_scroll:
+        attributes += ' maintain_scroll="true"'
+    template = "" if fragment is None else f"<template>{fragment}</template>"
+    return f"<turbo-stream {attributes}>{template}</turbo-stream>"
 
 
 TURBO_STREAM = "text/vnd.turbo-stream.html"

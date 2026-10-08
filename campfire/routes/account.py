@@ -176,7 +176,9 @@ async def edit_bot(request: Request, bot_id: int) -> Response:
 def save_bot(bot_id: int | None, name: str, webhook_url: str, avatar_upload: Upload | None) -> None:
     with db.transaction():
         if bot_id is None:
-            bot_id = domain.create_user(name=name, role=BOT, bot_token=secrets.token_hex(6)).id
+            bot_id = domain.create_user(
+                name=name, role=BOT, bot_token=domain.generate_bot_token()
+            ).id
         else:
             db.run(
                 "UPDATE users SET name=?,updated_at=? WHERE id=?",
@@ -216,7 +218,7 @@ def rotate_key(bot_id: int) -> None:
     with db.transaction():
         db.run(
             "UPDATE users SET bot_token=?,updated_at=? WHERE id=?",
-            (secrets.token_hex(6), format_time(now()), bot_id),
+            (domain.generate_bot_token(), format_time(now()), bot_id),
         )
 
 

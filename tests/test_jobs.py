@@ -156,3 +156,47 @@ def test_push_transport_connects_to_the_validated_address() -> None:
     ):
         push.pinned_session().post("https://fcm.googleapis.com/send", data=b"payload", timeout=3.0)
     connect.assert_called_once_with(("142.250.1.1", 443), timeout=3.0)
+
+
+def test_webhook_redirects_and_non_200_replies_are_not_followed_or_attached(w: World) -> None:
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    seen: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            seen.append(self.path)
+            self.rfile.read(int(self.headers["content-length"]))
+            if self.path == "/hook":
+                self.send_response(302)
+                self.send_header("location", "/elsewhere")
+                self.send_header("content-type", "image/png")
+                self.send_header("content-length", "5")
+                self.end_headers()
+                self.wfile.write(b"bytes")
+                return
+            self.send_response(200)
+            self.send_header("content-type", "text/plain")
+            self.send_header("content-length", "8")
+            self.end_headers()
+            self.wfile.write(b"followed")
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        bot = domain.create_user(name="Redirect bot", role=2, bot_token="redirect")
+        room = domain.create_room("Rooms::Direct", w.admin)
+        domain.grant_memberships(room, [w.admin, bot])
+        hook = domain.create_webhook(bot, f"http://127.0.0.1:{server.server_port}/hook")
+        message = domain.create_message(w.admin, room, "hello")
+        jobs.perform("webhook", {"webhook_id": hook, "message_id": message.id})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert seen == ["/hook"]
+    assert w.scalar("SELECT count(*) FROM messages WHERE room_id=?", room.id) == 1

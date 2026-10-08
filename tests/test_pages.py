@@ -172,8 +172,13 @@ def test_bots_lifecycle_and_key_rotation(w: World) -> None:
     assert isinstance(bot_id, int)
     assert w.scalar("SELECT url FROM webhooks WHERE user_id=?", bot_id) == "https://example.test/"
     token = w.scalar("SELECT bot_token FROM users WHERE id=?", bot_id)
+    assert isinstance(token, str)
+    assert re.fullmatch(r"[A-Za-z0-9]{22}", token)
     assert w.client.put(f"/account/bots/{bot_id}/key").status_code == 302
-    assert w.scalar("SELECT bot_token FROM users WHERE id=?", bot_id) != token
+    rotated = w.scalar("SELECT bot_token FROM users WHERE id=?", bot_id)
+    assert isinstance(rotated, str)
+    assert re.fullmatch(r"[A-Za-z0-9]{22}", rotated)
+    assert rotated != token
     listing = w.client.get("/account/bots").text
     assert "Deploy bot" in listing
     assert w.post(f"/account/bots/{bot_id}", method="delete").status_code == 302
