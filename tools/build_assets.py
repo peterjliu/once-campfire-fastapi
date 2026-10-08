@@ -1,9 +1,12 @@
-#!/usr/bin/env python3
-"""Compile the pinned Propshaft/importmap assets without invoking Ruby or Rust."""
+"""Compile the pinned Propshaft/importmap assets without invoking Ruby.
+
+Adapted from once-campfire-django's bin/build-assets (originally the Go port's algorithm).
+"""
 
 import hashlib
 import html
 import json
+import posixpath
 import re
 import shutil
 from pathlib import Path
@@ -13,7 +16,7 @@ SOURCES = ROOT / "assets/sources"
 RAILS = ROOT / "reference"
 OUT = ROOT / "assets/generated"
 WS = r"[ \t\n\x0b\x0c\r]"
-patterns = {
+PATTERNS: dict[str, re.Pattern[str]] = {
     "css": re.compile(
         r"url\("
         + WS
@@ -29,12 +32,12 @@ patterns = {
         + r"""*["']?\)"""
     ),
 }
-source_map = re.compile(
+SOURCE_MAP = re.compile(
     r"(//|/\*)# sourceMappingURL=(.+\.map)(" + WS + r"*?\*/)?" + WS + r"*?(?=\n?\Z)"
 )
 
 
-def plus(left, right):
+def plus(left: str, right: str) -> str:
     prefix = [p for p in left.split("/") if p]
     suffix = [p for p in right.split("/") if p]
     while True:
@@ -52,99 +55,103 @@ def plus(left, right):
     return "/".join(prefix + suffix) or "."
 
 
-def resolve(directory, url):
+def resolve(directory: str, url: str) -> str:
     if url.startswith("../"):
-        import posixpath
-
         return posixpath.normpath(plus(directory, url))
     if url.startswith("/"):
         return url[1:]
     return plus(directory, url.removeprefix("./"))
 
 
-def build():
+def directory_of(name: str) -> str:
+    return name.rsplit("/", 1)[0] if "/" in name else "."
+
+
+def kind_of(name: str) -> str:
+    return name.rsplit(".", 1)[-1]
+
+
+def load_assets() -> dict[str, bytes]:
     paths = [ROOT / "assets/overrides", SOURCES / "overrides"]
     for line in (SOURCES / "vendor/LOAD_PATH").read_text().splitlines():
         if line:
             kind, p = line.split(":", 1)
             paths.append((RAILS if kind == "reference" else SOURCES / "vendor") / p)
-    assets = {}
+    assets: dict[str, bytes] = {}
     for folder in paths:
         for p in sorted(folder.rglob("*")):
             if p.is_file() and not p.name.startswith("."):
                 assets.setdefault(p.relative_to(folder).as_posix(), p.read_bytes())
+    return assets
+
+
+def references(assets: dict[str, bytes], name: str) -> list[str]:
+    result: list[str] = []
+    pattern = PATTERNS.get(kind_of(name))
+    if pattern is None:
+        return result
+
+    def walk(current: str) -> None:
+        for m in pattern.finditer(assets[current].decode("latin1")):
+            url = m[1].encode("latin1").decode("utf8", "replace")
+            found = resolve(directory_of(current), url)
+            if found in assets and found not in result:
+                result.append(found)
+                walk(found)
+
+    walk(name)
+    return result
+
+
+def build() -> None:
+    assets = load_assets()
     initializer = (RAILS / "config/initializers/assets.rb").read_text()
-    version = re.search(
+    match = re.search(
         r"""^\s*Rails\.application\.config\.assets\.version\s*=\s*["']([^"']*)""",
         initializer,
         re.M,
     )
-    version = (version.group(1) if version else "1").encode()
+    version = (match.group(1) if match else "1").encode()
 
-    def directory(name):
-        return name.rsplit("/", 1)[0] if "/" in name else "."
-
-    def kind(name):
-        return name.rsplit(".", 1)[-1]
-
-    def references(name):
-        result = []
-        pattern = patterns.get(kind(name))
-
-        def walk(current):
-            for m in pattern.finditer(assets[current].decode("latin1")):
-                url = m[1].encode("latin1").decode("utf8", "replace")
-                found = resolve(directory(current), url)
-                if found in assets and found not in result:
-                    result.append(found)
-                    walk(found)
-
-        if pattern:
-            walk(name)
-        return result
-
-    manifest = {}
+    manifest: dict[str, str] = {}
     for name, data in assets.items():
         digest = hashlib.sha1(
-            data + b"".join(assets[p] for p in references(name)) + version
+            data + b"".join(assets[p] for p in references(assets, name)) + version
         ).hexdigest()[:8]
-        digested = (
+        manifest[name] = (
             name
             if re.search(r"-[0-9a-zA-Z_-]{7,128}\.digested", name)
             else re.sub(r"\.(\w+(?:\.map)?)$", lambda m: "-" + digest + m[0], name)
         )
-        manifest[name] = {"digested_path": digested, "integrity": None}
 
-    def url(name):
-        return "/assets/" + manifest[name]["digested_path"]
+    def url(name: str) -> str:
+        return "/assets/" + manifest[name]
 
-    def compile(name, data):
-        if kind(name) not in patterns:
+    def compile_asset(name: str, data: bytes) -> bytes:
+        pattern = PATTERNS.get(kind_of(name))
+        if pattern is None:
             return data
-        pattern = patterns[kind(name)]
 
-        def replacement(m):
+        def replacement(m: re.Match[str]) -> str:
             original = m[1].encode("latin1").decode("utf8", "replace")
-            found = resolve(directory(name), original)
-            value = (
-                '"' + (url(found) + (m[2] or "") if found in assets else original) + '"'
-            )
-            if kind(name) == "css":
+            found = resolve(directory_of(name), original)
+            value = '"' + (url(found) + (m[2] or "") if found in assets else original) + '"'
+            if kind_of(name) == "css":
                 value = "url(" + value + ")"
             return value.encode().decode("latin1")
 
         text = pattern.sub(replacement, data.decode("latin1"))
 
-        def mapping(m):
+        def mapping(m: re.Match[str]) -> str:
             value = re.sub(r"^(.+/)?/assets/", "", m[2], flags=re.M)
-            found = plus(directory(name), value) if directory(name) != "." else value
+            found = plus(directory_of(name), value) if directory_of(name) != "." else value
             return (
                 m[1]
                 + ("# sourceMappingURL=" + url(found) if found in assets else "")
                 + (m[3] or "")
             )
 
-        return source_map.sub(mapping, text).encode("latin1")
+        return SOURCE_MAP.sub(mapping, text).encode("latin1")
 
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -155,16 +162,34 @@ def build():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(p, target)
     for name, data in assets.items():
-        target = OUT / "public/assets" / manifest[name]["digested_path"]
+        target = OUT / "public/assets" / manifest[name]
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(compile(name, data))
-    dumped = json.dumps(manifest, ensure_ascii=False, separators=(",", ":"))
+        target.write_bytes(compile_asset(name, data))
+    dumped = json.dumps(
+        {name: {"digested_path": path, "integrity": None} for name, path in manifest.items()},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     (OUT / "manifest.json").write_text(dumped)
     (OUT / "public/assets/.manifest.json").write_text(dumped)
-    packages = {}
-    directories = []
-    for line in (RAILS / "config/importmap.rb").read_text().splitlines():
-        line = line.strip()
+    write_importmap(manifest)
+    styles = [
+        '<link rel="stylesheet" href="' + url(p) + '" data-turbo-track="reload" />'
+        for p in sorted(assets)
+        if p.endswith(".css")
+    ]
+    (OUT / "stylesheets.html").write_text("\n".join(styles))
+    print(f"Compiled {len(assets)} assets")
+
+
+def write_importmap(manifest: dict[str, str]) -> None:
+    def link(name: str) -> str:
+        return "/assets/" + manifest[name]
+
+    packages: dict[str, tuple[str, bool]] = {}
+    directories: list[tuple[str, dict[str, str], bool]] = []
+    for raw in (RAILS / "config/importmap.rb").read_text().splitlines():
+        line = raw.strip()
         if not line or line.startswith("#"):
             continue
         match = re.match(r"""(pin|pin_all_from)\s+["']([^"']+)["'](.*)""", line)
@@ -186,20 +211,13 @@ def build():
                 continue
             filename = p.relative_to(folder).as_posix()
             stem = filename[: -len(p.suffix)]
-            if stem == "index":
-                stem = ""
-            else:
-                stem = stem.removesuffix("/index")
+            stem = "" if stem == "index" else stem.removesuffix("/index")
             package = "/".join(filter(None, [options.get("under"), stem]))
-            logical = "/".join(
-                filter(None, [options.get("to", options.get("under")), filename])
-            )
+            logical = "/".join(filter(None, [options.get("to", options.get("under")), filename]))
             packages[package] = (logical, preload)
-    imports = {name: url(p) for name, (p, _) in packages.items() if p in manifest}
+    imports = {name: link(p) for name, (p, _) in packages.items() if p in manifest}
     preloads = list(
-        dict.fromkeys(
-            url(p) for p, preload in packages.values() if preload and p in manifest
-        )
+        dict.fromkeys(link(p) for p, preload in packages.values() if preload and p in manifest)
     )
     tags = (
         '<script type="importmap" data-turbo-track="reload">'
@@ -207,18 +225,10 @@ def build():
         + "</script>\n"
     )
     tags += "\n".join(
-        '<link rel="modulepreload" href="' + html.escape(p, quote=True) + '">'
-        for p in preloads
+        '<link rel="modulepreload" href="' + html.escape(p, quote=True) + '">' for p in preloads
     )
     tags += '\n<script type="module">import "application"</script>'
     (OUT / "importmap.html").write_text(tags)
-    styles = [
-        '<link rel="stylesheet" href="' + url(p) + '" data-turbo-track="reload" />'
-        for p in sorted(assets)
-        if p.endswith(".css")
-    ]
-    (OUT / "stylesheets.html").write_text("\n".join(styles))
-    print(f"Compiled {len(assets)} assets and {len(imports)} imports")
 
 
 if __name__ == "__main__":
