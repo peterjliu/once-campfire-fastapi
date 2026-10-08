@@ -1,0 +1,10 @@
+.git
+.venv
+tmp
+storage
+__pycache__
+*.pyc
+reference/.git
+assets/generated
+.pytest_cache
+.ruff_cache
