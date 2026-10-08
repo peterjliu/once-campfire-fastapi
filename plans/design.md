@@ -50,18 +50,18 @@ uvicorn (uvloop + httptools, N workers; N > 1 requires REDIS_URL)
 
 | Module | Responsibility |
 |---|---|
-| `config` | Environment contract |
+| `config`, `server`, `asgi` | Environment contract, Uvicorn launcher, ASGI stack assembly |
 | `db`, `models`, `queries` | Connections, transactions, typed rows, shared reads |
 | `rails` | Rails-compatible key derivation, signed/encrypted cookies, signed IDs, SGIDs |
 | `richtext`, `richtext_render` | Sanitizer, Action Text plain text, presentation |
-| `rendering`, `views_models` | Jinja environment and template view models |
-| `response_cache`, `compression`, `middleware`, `forms` | HTTP infrastructure |
+| `rendering`, `presentation`, `assets`, `urls` | Jinja environment, template view models, digested asset and signed paths |
+| `response_cache`, `compression`, `middleware`, `request_context`, `context`, `http` | HTTP infrastructure |
 | `routes/*` | FastAPI routers by area |
-| `domain` | Transaction owners for messages, rooms, users |
-| `storage`, `media` | Active Storage keys, uploads, variants (libvips/ffmpeg/poppler) |
-| `cable` | Action Cable protocol over Starlette WebSockets, Redis relay |
-| `jobs`, `push`, `opengraph` | Leased queue, web push/webhooks, unfurling |
-| `server`, `cli` | Launcher, prepare/backup/restore |
+| `domain`, `messaging` | Transaction owners for rooms/users and for messages/boosts |
+| `storage`, `files`, `media`, `vips` | Active Storage keys, uploads, ranged downloads, variants (libvips/ffmpeg/poppler) |
+| `cable`, `bus` | Action Cable protocol over Starlette WebSockets, typed Redis relay |
+| `jobs`, `push`, `opengraph` | Leased queue and webhooks, pinned Web Push, guarded unfurling |
+| `cli`, `clock`, `jsonvalue` | Prepare/backup/restore, Rails time format, typed JSON narrowing |
 
 ## Verification steps
 
