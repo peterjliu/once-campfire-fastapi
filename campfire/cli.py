@@ -75,8 +75,12 @@ def backup(output: Path | None = None) -> Path:
 
 def restore() -> None:
     """Restore checked snapshots while the application is stopped."""
+    from . import db, jobs
+
     settings = config.settings
     snapshots = settings.storage_path / "backups"
+    jobs.reset()
+    db.reset()
     targets = {
         "production.sqlite3": settings.database_path,
         "jobs.sqlite3": settings.storage_path / "db/jobs.sqlite3",
@@ -96,8 +100,6 @@ def restore() -> None:
         for suffix in ("-wal", "-shm"):
             target.with_name(target.name + suffix).unlink(missing_ok=True)
         os.replace(temporary, target)
-    from . import db
-
     db.reset()
 
 

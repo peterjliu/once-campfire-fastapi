@@ -8,8 +8,9 @@ import sqlite3
 import threading
 import time
 from collections.abc import Generator, Sequence
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
@@ -44,14 +45,48 @@ class Job:
     token: str
 
 
+class _QueueConnections(threading.local):
+    connection: sqlite3.Connection | None = None
+    path: Path | None = None
+    generation: int = -1
+
+
+_connections = _QueueConnections()
+_generation = 0
+
+
+def _open(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=10, isolation_level=None)
+    connection.execute("PRAGMA journal_mode=WAL")
+    # Same durability as the application database: a crash keeps every commit; only
+    # power loss can drop the newest transactions, and then from both databases alike.
+    connection.execute("PRAGMA synchronous=NORMAL")
+    connection.execute(SCHEMA)
+    return connection
+
+
+def reset() -> None:
+    """Close this thread's queue connection and make every other thread reopen its own."""
+    global _generation
+    _generation += 1
+    if _connections.connection is not None:
+        _connections.connection.close()
+        _connections.connection = None
+
+
 @contextmanager
 def connect() -> Generator[sqlite3.Connection]:
+    """This thread's long-lived queue connection (no per-use open, schema check or checkpoint)."""
     path = config.settings.storage_path / "db/jobs.sqlite3"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(path, timeout=10, isolation_level=None)) as connection:
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute(SCHEMA)
-        yield connection
+    local = _connections
+    if local.connection is None or local.path != path or local.generation != _generation:
+        if local.connection is not None:
+            local.connection.close()
+        local.connection = _open(path)
+        local.path = path
+        local.generation = _generation
+    yield local.connection
 
 
 def reset_rates() -> None:

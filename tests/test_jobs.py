@@ -200,3 +200,40 @@ def test_webhook_redirects_and_non_200_replies_are_not_followed_or_attached(w: W
         server.server_close()
     assert seen == ["/hook"]
     assert w.scalar("SELECT count(*) FROM messages WHERE room_id=?", room.id) == 1
+
+
+def test_queue_connection_is_reused_per_thread_and_reopened_after_reset(w: World) -> None:
+    import threading
+
+    with jobs.connect() as first:
+        pass
+    with jobs.connect() as second:
+        assert second.execute("PRAGMA synchronous").fetchone()[0] == 1
+        assert second.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert first is second
+    others: list[object] = []
+
+    def elsewhere() -> None:
+        with jobs.connect() as connection:
+            others.append(connection)
+
+    thread = threading.Thread(target=elsewhere)
+    thread.start()
+    thread.join()
+    assert others[0] is not second
+    jobs.reset()
+    with jobs.connect() as reopened:
+        assert reopened is not second
+        jobs.enqueue("test", {"number": 1})
+        assert reopened.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
+
+
+def test_restore_reopens_queue_connections(w: World) -> None:
+    jobs.enqueue("kept", {"number": 1})
+    cli.backup()
+    with jobs.connect() as before:
+        before.execute("DELETE FROM jobs")
+    cli.restore()
+    with jobs.connect() as after:
+        assert after is not before
+        assert after.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1

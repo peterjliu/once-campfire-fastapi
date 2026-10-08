@@ -129,7 +129,10 @@ def test_notification_batch_keeps_individual_jobs_and_one_queue_commit(w: World)
     def traced():
         with original() as connection:
             connection.set_trace_callback(statements.append)
-            yield connection
+            try:
+                yield connection
+            finally:
+                connection.set_trace_callback(None)
 
     with patch("campfire.jobs.connect", side_effect=traced) as connect:
         domain.enqueue_notifications(message, "plain message")

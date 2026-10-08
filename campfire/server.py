@@ -34,7 +34,7 @@ def main() -> None:
         workers=workers,
         loop="uvloop",
         http="httptools",
-        ws="websockets",
+        ws="websockets-sansio",
         access_log=False,
         proxy_headers=True,
         forwarded_allow_ips=os.environ.get("TRUSTED_PROXIES", "127.0.0.1"),
