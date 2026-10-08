@@ -270,13 +270,16 @@ def test_webhook_may_target_private_network_bots_like_rails(w: World) -> None:
     finally:
         server.shutdown()
         server.server_close()
-    assert "lan reply" == w.scalar(
-        "SELECT action_text_rich_texts.body FROM messages JOIN action_text_rich_texts ON "
-        "action_text_rich_texts.record_id=messages.id AND "
-        "action_text_rich_texts.record_type='Message' WHERE messages.room_id=? "
-        "AND messages.creator_id=?",
-        room.id,
-        bot.id,
+    assert (
+        w.scalar(
+            "SELECT action_text_rich_texts.body FROM messages JOIN action_text_rich_texts ON "
+            "action_text_rich_texts.record_id=messages.id AND "
+            "action_text_rich_texts.record_type='Message' WHERE messages.room_id=? "
+            "AND messages.creator_id=?",
+            room.id,
+            bot.id,
+        )
+        == "lan reply"
     )
 
 
